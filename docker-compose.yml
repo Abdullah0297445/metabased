@@ -1,0 +1,48 @@
+services:
+  metabase:
+    image: metabase/metabase:v0.63.15
+    container_name: metabase
+    restart: unless-stopped
+    environment:
+      MB_DB_TYPE: postgres
+      MB_DB_HOST: engine-session
+      MB_DB_PORT: 5432
+      MB_DB_DBNAME: ${METABASE_DB_NAME}
+      MB_DB_USER: ${METABASE_DB_USER}
+      MB_DB_PASS: ${METABASE_DB_PASSWORD}
+      MB_ENCRYPTION_SECRET_KEY: ${MB_ENCRYPTION_SECRET_KEY:-}
+      MB_AGGREGATED_QUERY_ROW_LIMIT: ${MB_AGGREGATED_QUERY_ROW_LIMIT:-10000}
+      MB_UNAGGREGATED_QUERY_ROW_LIMIT: ${MB_UNAGGREGATED_QUERY_ROW_LIMIT:-2000}
+    volumes:
+      - /dev/urandom:/dev/random:ro
+      - metabase_plugins:/plugins
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "-I", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.metabase-public.rule=Host(`${METABASE_HOST}`)"
+      - "traefik.http.routers.metabase-public.entrypoints=web"
+      - "traefik.http.routers.metabase-public.middlewares=force-secure@docker"
+      - "traefik.http.routers.metabase-secure.rule=Host(`${METABASE_HOST}`)"
+      - "traefik.http.routers.metabase-secure.entrypoints=websecure"
+      - "traefik.http.routers.metabase-secure.tls.certresolver=${RESOLVER_NAME}"
+      - "traefik.http.services.metabase.loadbalancer.server.port=3000"
+      - "traefik.docker.network=traefik_host_network"
+    networks:
+      - traefik_host_network
+      - postgres_host_network
+
+volumes:
+  metabase_plugins:
+
+networks:
+  traefik_host_network:
+    name: traefik_host_network
+    external: true
+  postgres_host_network:
+    name: postgres_host_network
+    external: true
