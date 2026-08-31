@@ -1,19 +1,13 @@
 # Metabase
 
-Self-hosted [Metabase](https://www.metabase.com) for a single host, as a docker container.
+Self-hosted [Metabase](https://www.metabase.com) as a docker container, behind a traefik
+proxy, with Postgres as its application database.
 
-- Behind a traefik host proxy, which terminates TLS. Metabase holds no certificate and
-  publishes no port.
-- Backed by a Postgres server, rather than the default H2 file.
+- traefik terminates TLS. Metabase holds no certificate and publishes no port.
+- Postgres holds the application database, rather than the default H2 file.
 
-## Naming
-
-`metabased` — the **`d`** marks a **docker**-only deployment. Metabase runs as a container,
-driven by docker compose. Nothing is installed on the host itself.
-
-There is no `_host_` marker. That marker belongs to host-wide infrastructure shared by
-every stack on a host, such as a reverse proxy or a shared database server. This repo is
-one application, so it carries the `d` alone.
+`metabased` — the **`d`** marks a docker-only deployment: it runs as a container, driven by
+docker compose, with nothing installed alongside it.
 
 ## What runs here
 
@@ -21,8 +15,8 @@ one application, so it carries the `d` alone.
 |---|---|---|
 | `metabase` | `metabase/metabase` | The whole application: the web UI, the query engine, the scheduler, and the MCP server at `/api/metabase-mcp`. One JVM process. |
 
-It listens on **3000** inside the container and publishes no host port. The proxy reaches
-it on `traefik_host_network`; the Postgres server answers on `postgres_host_network`.
+It listens on **3000** inside the container and publishes no port. The proxy reaches it on
+the network you name in `TRAEFIK_NETWORK`; Postgres answers on `POSTGRES_NETWORK`.
 
 The tag is **exact**, never `latest`. Metabase runs Liquibase migrations at start, a
 failure is fatal, and the supported way back is a restore rather than a downgrade — so an
@@ -33,22 +27,24 @@ unattended pull would be an unattended, irreversible schema change. See
 
 Three things must already exist. None of them is made by this repo.
 
-1. **The host proxy runs**, so the `traefik_host_network` network exists, and it defines
-   the certificate resolver you will name in `RESOLVER_NAME`. traefik issues no
-   certificate for a resolver it does not hold.
-2. **A Postgres server answers on the `postgres_host_network` network**, and it holds a
-   database and a login role for Metabase. **Postgres 14 or newer** — the v0.63 line
-   raised the floor. Keep the connection details.
-3. **A public DNS A record** for the subdomain points at this host. A proxy using a DNS-01
-   challenge can issue the certificate before that record exists — but nothing answers on
-   the name until it does.
+1. **A traefik proxy runs** on a docker network you can join, and it defines both the
+   certificate resolver you name in `RESOLVER_NAME` and the HTTP-to-HTTPS middleware you
+   name in `HTTPS_MIDDLEWARE`. traefik issues no certificate for a resolver it does not
+   hold.
+2. **A Postgres server answers on a docker network you can join**, holding a database and
+   a login role for Metabase. **Postgres 14 or newer** — the v0.63 line raised the floor.
+   Keep the connection details.
+3. **A public DNS A record** for the subdomain points at this machine. A proxy using a
+   DNS-01 challenge can issue the certificate before that record exists — but nothing
+   answers on the name until it does.
 
-`MB_DB_HOST` is pinned to `engine-session` and `MB_DB_PORT` to `5432` in
-`docker-compose.yml`, not exposed in `.env`. Both are **network aliases and ports on the
-Postgres network**, and the alias names the **session**-pooled endpoint deliberately — see
-[The application pool sits on the session door](#the-application-pool-sits-on-the-session-door).
-Change those two values in the compose file if your server presents itself under a
-different name.
+Both networks are joined as **external** — this repo creates neither. Name them in
+`TRAEFIK_NETWORK` and `POSTGRES_NETWORK`. `METABASE_DB_HOST` and `METABASE_DB_PORT` are the
+address **on that Postgres network**, which for a container is usually its service or
+container name and the port it listens on there, not anything routable from your shell. If
+your server sits behind a connection pooler, read [Point it at a session-pooled
+endpoint](#point-it-at-a-session-pooled-endpoint) before choosing which endpoint to
+name.
 
 ## Usage
 
@@ -56,7 +52,7 @@ different name.
 2. Change every value in `.env`. Generate the encryption key with
    `openssl rand -base64 32`.
 3. Confirm `.gitignore` excludes `.env` **before** the first commit.
-4. **Back up `.env` to a secure place away from this host, and back it up again after
+4. **Back up `.env` to a secure place away from this machine, and back it up again after
    every change to it.** It holds `MB_ENCRYPTION_SECRET_KEY`, which is not in the database
    and cannot be derived. See [The encryption key is a one-way
    door](#the-encryption-key-is-a-one-way-door) — this is the most consequential line in
@@ -79,8 +75,13 @@ secret belongs in any tracked file.
 
 | Variable | Required | Default | What it is |
 |---|---|---|---|
-| `METABASE_HOST` | yes | — | The subdomain Metabase answers on. A public DNS A record for it must already point at this host. traefik reads it in the `Host()` rule of both routers. |
-| `RESOLVER_NAME` | yes | — | The certificate resolver of the host proxy. It **must** be the same word the proxy defines. |
+| `METABASE_HOST` | yes | — | The subdomain Metabase answers on. A public DNS A record for it must already point at this machine. traefik reads it in the `Host()` rule of both routers. |
+| `TRAEFIK_NETWORK` | yes | — | The existing docker network the proxy is on. Joined as external, and also given to traefik as `traefik.docker.network`. |
+| `POSTGRES_NETWORK` | yes | — | The existing docker network the Postgres server answers on. Joined as external. |
+| `RESOLVER_NAME` | yes | — | The proxy's certificate resolver. It **must** be the same word the proxy defines. |
+| `HTTPS_MIDDLEWARE` | yes | — | The proxy's own HTTP-to-HTTPS middleware, e.g. `redirect-to-https@docker`. Applied to the plain-HTTP router so it is the only thing doing the redirect. |
+| `METABASE_DB_HOST` | yes | — | Where Postgres answers **on `POSTGRES_NETWORK`** — usually a container or service name, not a shell-routable address. |
+| `METABASE_DB_PORT` | no | `5432` | The port it answers on there. |
 | `METABASE_DB_NAME` | yes | — | The database Metabase keeps its own tables in. Its dashboards, questions, users and settings all live here. |
 | `METABASE_DB_USER` | yes | — | The login role that owns that database. |
 | `METABASE_DB_PASSWORD` | yes | — | That role's password. Postgres keeps no copy you can read back, so keep your own record. |
@@ -119,7 +120,7 @@ So the only exit from a lost key is restoring a dump taken before encryption was
 on. Past your backup retention there is no exit: you rebuild every dashboard and every
 question by hand.
 
-**Keep a copy of the key off this host** — with your other durable secrets, in whatever
+**Keep a copy of the key off this machine** — with your other durable secrets, in whatever
 place survives the machine. `.env` is the working copy, not the record.
 
 Turning it on for the first time is one restart: put the key in `.env`, `docker compose up
@@ -135,18 +136,19 @@ Do it **on its own**, not in the same window as a version upgrade. One boot doin
 novel thing leaves a failure with one candidate cause, and it keeps the dump you took
 beforehand openable without the key.
 
-## The application pool sits on the session door
+## Point it at a session-pooled endpoint
 
-`MB_DB_HOST` names `engine-session` — a **session**-pooled endpoint, not a transaction-
-pooled one. Metabase holds connections across statements and keeps state on them, which is
-what a transaction pooler takes away.
+If your Postgres sits behind a connection pooler such as PgBouncer, `METABASE_DB_HOST` must
+name a **session**-pooled endpoint, not a transaction-pooled one. Metabase holds
+connections across statements and keeps state on them, which is exactly what a transaction
+pooler takes away. Pointing straight at Postgres with no pooler in between is fine.
 
 The consequence is worth knowing before you tune anything: **on a session-pooled endpoint
 each connection Metabase holds pins a server connection for as long as it holds it.**
 Metabase's application pool is capped by `MB_APPLICATION_DB_MAX_CONNECTION_POOL_SIZE`,
-default **15**, and this deployment runs that default. Raise it and you raise the number
-of server connections this one application occupies on a server that other applications
-may share — so size it against the server's `max_connections`, not against Metabase alone.
+default **15**, and this deployment runs that default. Raise it and you raise the number of
+server connections this one application occupies on a server other applications may share —
+so size it against the server's `max_connections`, not against Metabase alone.
 
 Metabase reports its own use in the logs, as `App DB connections: 12/15`. Watch that
 before reaching for the knob.
@@ -241,9 +243,9 @@ new plugin API after a major upgrade.
 - `traefik.docker.network` is load-bearing, not belt-and-braces. This container sits on
   two networks, and a proxy with no `--providers.docker.network` default would otherwise
   be free to pick the wrong address.
-- HTTP-to-HTTPS redirection is left to the proxy's own middleware, named here as
-  `force-secure@docker`. Metabase's own **Redirect to HTTPS** setting is redundant behind
-  it, and turns into a redirect loop if `X-Forwarded-Proto` ever stops arriving.
+- HTTP-to-HTTPS redirection is left to the proxy's own middleware, named in
+  `HTTPS_MIDDLEWARE`. Metabase's own **Redirect to HTTPS** setting is redundant behind it,
+  and turns into a redirect loop if `X-Forwarded-Proto` ever stops arriving.
 - `/dev/urandom` is mounted over `/dev/random`. The JVM blocks on a starved entropy pool
   otherwise, which shows up as a start that hangs rather than one that fails.
 - The MCP server at `/api/metabase-mcp` is part of the application, on every edition.

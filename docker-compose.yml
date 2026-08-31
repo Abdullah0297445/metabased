@@ -5,8 +5,8 @@ services:
     restart: unless-stopped
     environment:
       MB_DB_TYPE: postgres
-      MB_DB_HOST: engine-session
-      MB_DB_PORT: 5432
+      MB_DB_HOST: ${METABASE_DB_HOST}
+      MB_DB_PORT: ${METABASE_DB_PORT:-5432}
       MB_DB_DBNAME: ${METABASE_DB_NAME}
       MB_DB_USER: ${METABASE_DB_USER}
       MB_DB_PASS: ${METABASE_DB_PASSWORD}
@@ -26,23 +26,23 @@ services:
       - "traefik.enable=true"
       - "traefik.http.routers.metabase-public.rule=Host(`${METABASE_HOST}`)"
       - "traefik.http.routers.metabase-public.entrypoints=web"
-      - "traefik.http.routers.metabase-public.middlewares=force-secure@docker"
+      - "traefik.http.routers.metabase-public.middlewares=${HTTPS_MIDDLEWARE}"
       - "traefik.http.routers.metabase-secure.rule=Host(`${METABASE_HOST}`)"
       - "traefik.http.routers.metabase-secure.entrypoints=websecure"
       - "traefik.http.routers.metabase-secure.tls.certresolver=${RESOLVER_NAME}"
       - "traefik.http.services.metabase.loadbalancer.server.port=3000"
-      - "traefik.docker.network=traefik_host_network"
+      - "traefik.docker.network=${TRAEFIK_NETWORK}"
     networks:
-      - traefik_host_network
-      - postgres_host_network
+      - traefik_network
+      - postgres_network
 
 volumes:
   metabase_plugins:
 
 networks:
-  traefik_host_network:
-    name: traefik_host_network
+  traefik_network:
+    name: ${TRAEFIK_NETWORK}
     external: true
-  postgres_host_network:
-    name: postgres_host_network
+  postgres_network:
+    name: ${POSTGRES_NETWORK}
     external: true
